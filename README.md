@@ -30,3 +30,5 @@ Segmented coins output images
 ![Match 3](output_part2/match3.jpg)
 ![Match 4](output_part2/match4.jpg)
 
+## Report 
+The Report is [here](./VR_Assingment1.pdf)
