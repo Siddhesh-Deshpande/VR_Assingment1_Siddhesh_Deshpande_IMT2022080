@@ -17,7 +17,7 @@ Steps to run the code are as follows:
 
 ## Output Images 
 ### Part 1
-![outlined image](/output_part1/outlined.png)
+![outlined image](/output_part1/outlined.png)\
 Segmented coins output images
 | ![segmented_coin_0](/output_part1/segmented_coin_0.png) | ![segmented_coin_1](/output_part1/segmented_coin_1.png) | ![segmented_coin_2](/output_part1/segmented_coin_2.png) |
 |---|---|---|
