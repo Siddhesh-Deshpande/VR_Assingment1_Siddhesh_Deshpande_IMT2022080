@@ -3,76 +3,87 @@ import cv2
 import numpy as np
 
 def detect_features(image):
+    # Detect keypoints and descriptors using SIFT
     sift = cv2.SIFT_create()
     keypoints, descriptors = sift.detectAndCompute(image, None)
     keypoints = np.float32([kp.pt for kp in keypoints])
     return keypoints, descriptors
 
-def match_features(kp1, kp2, desc1, desc2, ratio=0.75, reproj_thresh=4.0):
+def match_features(kpA, kpB, descA, descB, ratio=0.75, reproj_thresh=4.0):
+    # Match features using BFMatcher and Lowe's ratio test
     matcher = cv2.BFMatcher()
-    raw_matches = matcher.knnMatch(desc1, desc2, 2)
-    good_matches = [(m[0].trainIdx, m[0].queryIdx) for m in raw_matches if len(m) == 2 and m[0].distance < m[1].distance * ratio]
+    raw_matches = matcher.knnMatch(descA, descB, 2)
+    good_matches = [(m[0].trainIdx, m[0].queryIdx) for m in raw_matches 
+                    if len(m) == 2 and m[0].distance < m[1].distance * ratio]
     
     if len(good_matches) > 4:
-        pts1 = np.float32([kp1[i] for (_, i) in good_matches])
-        pts2 = np.float32([kp2[i] for (i, _) in good_matches])
-        H, status = cv2.findHomography(pts1, pts2, cv2.RANSAC, reproj_thresh)
+        # Find homography using RANSAC
+        ptsA = np.float32([kpA[i] for (_, i) in good_matches])
+        ptsB = np.float32([kpB[i] for (i, _) in good_matches])
+        H, status = cv2.findHomography(ptsA, ptsB, cv2.RANSAC, reproj_thresh)
         return good_matches, H, status
     
     return None
 
-def draw_matches(image1, image2, kp1, kp2, matches, status, max_lines=100):
-    h1, w1 = image1.shape[:2]
-    h2, w2 = image2.shape[:2]
-    result = np.zeros((max(h1, h2), w1 + w2, 3), dtype="uint8")
-    result[:h1, :w1] = image1
-    result[:h2, w1:] = image2
+def draw_matches(imageA, imageB, kpA, kpB, matches, status, max_lines=100):
+    # Draw matching lines between images
+    hA, wA = imageA.shape[:2]
+    hB, wB = imageB.shape[:2]
+    result = np.zeros((max(hA, hB), wA + wB, 3), dtype="uint8")
+    result[:hA, :wA] = imageA
+    result[:hB, wA:] = imageB
     
-    for i, ((train_idx, query_idx), s) in enumerate(zip(matches, status)):
-        if s and i < max_lines:
-            pt1 = (int(kp1[query_idx][0]), int(kp1[query_idx][1]))
-            pt2 = (int(kp2[train_idx][0]) + w1, int(kp2[train_idx][1]))
-            cv2.line(result, pt1, pt2, (0, 0, 255), 1)
+    line_count = 0
+    for ((train_idx, query_idx), s) in zip(matches, status):
+        if s and line_count < max_lines:
+            ptA = (int(kpA[query_idx][0]), int(kpA[query_idx][1]))
+            ptB = (int(kpB[train_idx][0]) + wA, int(kpB[train_idx][1]))
+            cv2.line(result, ptA, ptB, (0, 0, 255), 1)
+            line_count += 1
     
     return result
 
 def crop_image(image):
+    # Remove black borders from the stitched image
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     if contours:
         x, y, w, h = cv2.boundingRect(contours[0])
-        return image[y:y + h, x:x + w]
+        return image[y:y + h - 1, x:x + w - 1]
     
     return image
 
 def resize_image(image, width):
+    # Resize image while maintaining aspect ratio
     h, w = image.shape[:2]
     new_height = int((width / float(w)) * h)
     return cv2.resize(image, (width, new_height), interpolation=cv2.INTER_AREA)
 
 def stitch_images(image1, image2, visualize=False):
-    kp1, desc1 = detect_features(image1)
-    kp2, desc2 = detect_features(image2)
+    # Stitch two images using feature matching and homography
+    kpA, descA = detect_features(image2)
+    kpB, descB = detect_features(image1)
     
-    match_result = match_features(kp1, kp2, desc1, desc2)
+    match_result = match_features(kpA, kpB, descA, descB)
     if not match_result:
         print("Not enough keypoints matched.")
         return None
     
     matches, H, status = match_result
-    stitched = cv2.warpPerspective(image1, H, (image1.shape[1] + image2.shape[1], image1.shape[0]))
-    stitched[0:image2.shape[0], 0:image2.shape[1]] = image2
+    stitched = cv2.warpPerspective(image2, H, (image2.shape[1] + image1.shape[1], image2.shape[0]))
+    stitched[0:image1.shape[0], 0:image1.shape[1]] = image1
     stitched = crop_image(stitched)
     
     if visualize:
-        match_viz = draw_matches(image1, image2, kp1, kp2, matches, status)
+        match_viz = draw_matches(image2, image1, kpA, kpB, matches, status)
         return stitched, match_viz
     
     return stitched
 
 def process_folder(input_folder, output_folder):
+    # Process images in a folder and stitch them sequentially
     image_paths = sorted(
         [os.path.join(input_folder, f) for f in os.listdir(input_folder)],
         key=lambda x: int(os.path.splitext(os.path.basename(x))[0])
@@ -90,13 +101,13 @@ def process_folder(input_folder, output_folder):
         result = stitch_images(base_image, next_image, visualize=True)
         if result is None:
             continue
-        
-        base_image, match_viz = result
-        cv2.imwrite(os.path.join(output_folder, f"matches_{i}.jpg"), match_viz)
+        stitched, match_viz = result
+        cv2.imwrite(os.path.join(output_folder, f"match{i}.jpg"), match_viz)
+        base_image = stitched
     
     cv2.imwrite(os.path.join(output_folder, "panorama.jpg"), base_image)
-    print(f"Stitching complete. Results saved in {output_folder}.")
-    
+
 if __name__ == "__main__":
-    
+    if not os.path.exists("output_part2"):
+        os.mkdir("output_part2")
     process_folder("input_part2", "output_part2")
