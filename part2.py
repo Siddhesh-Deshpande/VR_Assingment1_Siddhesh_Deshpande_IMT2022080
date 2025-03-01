@@ -1,85 +1,102 @@
+import os
 import cv2
 import numpy as np
 
-def detect_keypoints_and_match(img1, img2):
-    """Detects keypoints and matches them using SIFT and FLANN-based matcher."""
-    gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-    gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-
-    # Use SIFT for feature detection
+def detect_features(image):
     sift = cv2.SIFT_create()
-    keypoints1, descriptors1 = sift.detectAndCompute(gray1, None)
-    keypoints2, descriptors2 = sift.detectAndCompute(gray2, None)
+    keypoints, descriptors = sift.detectAndCompute(image, None)
+    keypoints = np.float32([kp.pt for kp in keypoints])
+    return keypoints, descriptors
 
-    # FLANN-based matcher (fast for SIFT)
-    index_params = dict(algorithm=1, trees=5)  # KD-Tree
-    search_params = dict(checks=50)  
-    flann = cv2.FlannBasedMatcher(index_params, search_params)
+def match_features(kp1, kp2, desc1, desc2, ratio=0.75, reproj_thresh=4.0):
+    matcher = cv2.BFMatcher()
+    raw_matches = matcher.knnMatch(desc1, desc2, 2)
+    good_matches = [(m[0].trainIdx, m[0].queryIdx) for m in raw_matches if len(m) == 2 and m[0].distance < m[1].distance * ratio]
+    
+    if len(good_matches) > 4:
+        pts1 = np.float32([kp1[i] for (_, i) in good_matches])
+        pts2 = np.float32([kp2[i] for (i, _) in good_matches])
+        H, status = cv2.findHomography(pts1, pts2, cv2.RANSAC, reproj_thresh)
+        return good_matches, H, status
+    
+    return None
 
-    matches = flann.knnMatch(descriptors1, descriptors2, k=2)
+def draw_matches(image1, image2, kp1, kp2, matches, status, max_lines=100):
+    h1, w1 = image1.shape[:2]
+    h2, w2 = image2.shape[:2]
+    result = np.zeros((max(h1, h2), w1 + w2, 3), dtype="uint8")
+    result[:h1, :w1] = image1
+    result[:h2, w1:] = image2
+    
+    for i, ((train_idx, query_idx), s) in enumerate(zip(matches, status)):
+        if s and i < max_lines:
+            pt1 = (int(kp1[query_idx][0]), int(kp1[query_idx][1]))
+            pt2 = (int(kp2[train_idx][0]) + w1, int(kp2[train_idx][1]))
+            cv2.line(result, pt1, pt2, (0, 0, 255), 1)
+    
+    return result
 
-    # Apply Lowe's ratio test for better matches
-    good_matches = []
-    for m, n in matches:
-        if m.distance < 0.7 * n.distance:  # Lowe's ratio test
-            good_matches.append(m)
+def crop_image(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if contours:
+        x, y, w, h = cv2.boundingRect(contours[0])
+        return image[y:y + h, x:x + w]
+    
+    return image
 
-    return keypoints1, keypoints2, good_matches
+def resize_image(image, width):
+    h, w = image.shape[:2]
+    new_height = int((width / float(w)) * h)
+    return cv2.resize(image, (width, new_height), interpolation=cv2.INTER_AREA)
 
-def stitch_images(img1, img2):
-    """Stitches two images using keypoint matching and homography."""
-    keypoints1, keypoints2, good_matches = detect_keypoints_and_match(img1, img2)
-
-    if len(good_matches) < 4:  # Homography needs at least 4 matches
-        print("Not enough good matches!")
+def stitch_images(image1, image2, visualize=False):
+    kp1, desc1 = detect_features(image1)
+    kp2, desc2 = detect_features(image2)
+    
+    match_result = match_features(kp1, kp2, desc1, desc2)
+    if not match_result:
+        print("Not enough keypoints matched.")
         return None
-
-    # Extract coordinates of matched points
-    points1 = np.float32([keypoints1[m.queryIdx].pt for m in good_matches])
-    points2 = np.float32([keypoints2[m.trainIdx].pt for m in good_matches])
-
-    # Compute Homography matrix
-    H, _ = cv2.findHomography(points2, points1, cv2.RANSAC)
-
-    # Warp img2 to img1's perspective
-    height1, width1 = img1.shape[:2]
-    height2, width2 = img2.shape[:2]
-    img2_warped = cv2.warpPerspective(img2, H, (width1 + width2, height1))
-
-    # Place img1 on the left side
-    img2_warped[0:height1, 0:width1] = img1
-
-    # Convert to grayscale to find non-black areas
-    gray = cv2.cvtColor(img2_warped, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 1, 255, cv2.THRESH_BINARY)
-
-    # Find bounding box of the non-black area
-    coords = cv2.findNonZero(thresh)
-    x, y, w, h = cv2.boundingRect(coords)
-
-    # Crop the valid region
-    stitched = img2_warped[y:y+h, x:x+w]
-
+    
+    matches, H, status = match_result
+    stitched = cv2.warpPerspective(image1, H, (image1.shape[1] + image2.shape[1], image1.shape[0]))
+    stitched[0:image2.shape[0], 0:image2.shape[1]] = image2
+    stitched = crop_image(stitched)
+    
+    if visualize:
+        match_viz = draw_matches(image1, image2, kp1, kp2, matches, status)
+        return stitched, match_viz
+    
     return stitched
 
-# Load overlapping images
-img1 = cv2.imread("image1.jpeg")  # Left image
-img2 = cv2.imread("image2.jpeg")  # Right image
-
-# Perform stitching
-panorama = stitch_images(img1, img2)
-
-if panorama is not None:
-    # Resize for display (Optional)
-    scale_percent = 50  # Adjust this to control output size
-    width = int(panorama.shape[1] * scale_percent / 100)
-    height = int(panorama.shape[0] * scale_percent / 100)
-    resized_panorama = cv2.resize(panorama, (width, height))
-
-    # Show and save the final stitched image
-    cv2.imshow("Panorama", resized_panorama)
-    cv2.imwrite("stitched_panorama.jpg", panorama)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
-else:
-    print("Failed to create panorama.")
+def process_folder(input_folder, output_folder):
+    image_paths = sorted(
+        [os.path.join(input_folder, f) for f in os.listdir(input_folder)],
+        key=lambda x: int(os.path.splitext(os.path.basename(x))[0])
+    )
+    
+    if len(image_paths) < 2:
+        print("Need at least two images to stitch.")
+        return
+    
+    base_image = resize_image(cv2.imread(image_paths[0]), width=600)
+    os.makedirs(output_folder, exist_ok=True)
+    
+    for i in range(1, len(image_paths)):
+        next_image = resize_image(cv2.imread(image_paths[i]), width=600)
+        result = stitch_images(base_image, next_image, visualize=True)
+        if result is None:
+            continue
+        
+        base_image, match_viz = result
+        cv2.imwrite(os.path.join(output_folder, f"matches_{i}.jpg"), match_viz)
+    
+    cv2.imwrite(os.path.join(output_folder, "panorama.jpg"), base_image)
+    print(f"Stitching complete. Results saved in {output_folder}.")
+    
+if __name__ == "__main__":
+    
+    process_folder("input_part2", "output_part2")
