@@ -21,7 +21,8 @@ Steps to run the code are as follows:
 Segmented coins output images
 | ![segmented_coin_0](/output_part1/segmented_coin_0.png) | ![segmented_coin_1](/output_part1/segmented_coin_1.png) | ![segmented_coin_2](/output_part1/segmented_coin_2.png) |
 |---|---|---|
-| ![segmented_coin_3](/output_part1/segmented_coin_3.png) | ![segmented_coin_4](/output_part1/segmented_coin_4.png) | ![segmented_coin_5](/output_part1/segmented_coin_5.png) | ![segmented_coin_5](/output_part1/segmented_coin_6.png)|
+| ![segmented_coin_3](/output_part1/segmented_coin_3.png) | ![segmented_coin_4](/output_part1/segmented_coin_4.png) | ![segmented_coin_5](/output_part1/segmented_coin_5.png) | 
+|![segmented_coin_](/output_part1/segmented_coin_6.png)|
 
 ### Part 2
 ![Panorama](output_part2/panorama.jpg)
